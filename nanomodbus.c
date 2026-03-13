@@ -39,6 +39,8 @@
 #define NMBS_DEBUG_PRINT(...) (void) (0)
 #endif
 
+#define NMBS_PDU_DATA_MAX 252
+
 
 static uint8_t get_1(nmbs_t* nmbs) {
     uint8_t result = nmbs->msg.buf[nmbs->msg.buf_idx];
@@ -1805,6 +1807,125 @@ static nmbs_error handle_read_device_identification(nmbs_t* nmbs) {
 }
 #endif
 
+static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
+    if (!nmbs->custom.handler)
+        return send_exception_msg(nmbs, NMBS_EXCEPTION_ILLEGAL_FUNCTION);
+
+    const uint8_t* request_data = NULL;
+    uint16_t request_data_len = nmbs->custom.request_data_len;
+    nmbs_error err = NMBS_ERROR_NONE;
+
+    if (nmbs->custom.data_len_handler) {
+        if (nmbs->platform.transport == NMBS_TRANSPORT_TCP) {
+            const uint16_t mbap_length = ((uint16_t) nmbs->msg.buf[4] << 8) | (uint16_t) nmbs->msg.buf[5];
+            if (mbap_length < 2)
+                return NMBS_ERROR_INVALID_REQUEST;
+
+            request_data_len = (uint16_t) (mbap_length - 2);
+            if (request_data_len > NMBS_PDU_DATA_MAX)
+                return NMBS_ERROR_INVALID_REQUEST;
+
+            if (request_data_len > 0)
+                request_data = nmbs->msg.buf + nmbs->msg.buf_idx;
+
+            bool is_complete = false;
+            uint16_t resolved_len = 0;
+            err = nmbs->custom.data_len_handler(nmbs->msg.fc, request_data, request_data_len, &is_complete,
+                                                &resolved_len, nmbs->msg.unit_id, nmbs->callbacks.arg);
+            if (err != NMBS_ERROR_NONE)
+                return err;
+
+            if (!is_complete || resolved_len != request_data_len)
+                return NMBS_ERROR_INVALID_REQUEST;
+        }
+        else {
+            const uint16_t request_data_start = nmbs->msg.buf_idx;
+            bool request_data_len_known = false;
+            uint16_t request_data_len_read = 0;
+
+            while (!request_data_len_known || request_data_len_read < request_data_len) {
+                if (nmbs->msg.buf_idx >= (sizeof(nmbs->msg.buf) - 2))
+                    return NMBS_ERROR_INVALID_REQUEST;
+
+                err = recv(nmbs, 1);
+                if (err != NMBS_ERROR_NONE)
+                    return err;
+
+                discard_1(nmbs);
+                request_data_len_read++;
+
+                if (!request_data_len_known) {
+                    bool is_complete = false;
+                    uint16_t resolved_len = 0;
+                    err = nmbs->custom.data_len_handler(nmbs->msg.fc, nmbs->msg.buf + request_data_start,
+                                                        request_data_len_read, &is_complete, &resolved_len,
+                                                        nmbs->msg.unit_id, nmbs->callbacks.arg);
+                    if (err != NMBS_ERROR_NONE)
+                        return err;
+
+                    if (is_complete) {
+                        if (resolved_len > NMBS_PDU_DATA_MAX || resolved_len < request_data_len_read)
+                            return NMBS_ERROR_INVALID_REQUEST;
+
+                        request_data_len = resolved_len;
+                        request_data_len_known = true;
+                    }
+                }
+            }
+
+            err = recv_msg_footer(nmbs);
+            if (err != NMBS_ERROR_NONE)
+                return err;
+
+            if (request_data_len > 0)
+                request_data = nmbs->msg.buf + request_data_start;
+        }
+    }
+    else {
+        if (request_data_len > 0) {
+            err = recv(nmbs, request_data_len);
+            if (err != NMBS_ERROR_NONE)
+                return err;
+
+            request_data = get_n(nmbs, request_data_len);
+        }
+
+        err = recv_msg_footer(nmbs);
+        if (err != NMBS_ERROR_NONE)
+            return err;
+    }
+
+    if (nmbs->msg.ignored)
+        return NMBS_ERROR_NONE;
+
+    uint8_t response_data[NMBS_PDU_DATA_MAX];
+    uint16_t response_data_len = NMBS_PDU_DATA_MAX;
+
+    err = nmbs->custom.handler(nmbs->msg.fc, request_data, request_data_len, response_data, &response_data_len,
+                               nmbs->msg.unit_id, nmbs->callbacks.arg);
+    if (err != NMBS_ERROR_NONE) {
+        if (nmbs_error_is_exception(err))
+            return send_exception_msg(nmbs, err);
+
+        return send_exception_msg(nmbs, NMBS_EXCEPTION_SERVER_DEVICE_FAILURE);
+    }
+
+    if (response_data_len > NMBS_PDU_DATA_MAX)
+        return send_exception_msg(nmbs, NMBS_EXCEPTION_SERVER_DEVICE_FAILURE);
+
+    if (!nmbs->msg.broadcast) {
+        put_res_header(nmbs, response_data_len);
+        for (uint16_t i = 0; i < response_data_len; i++)
+            put_1(nmbs, response_data[i]);
+
+        err = send_msg(nmbs);
+        if (err != NMBS_ERROR_NONE)
+            return err;
+    }
+
+    return NMBS_ERROR_NONE;
+}
+
 
 static nmbs_error handle_req_fc(nmbs_t* nmbs) {
     NMBS_DEBUG_PRINT("fc %d\t", nmbs->msg.fc);
@@ -1883,9 +2004,14 @@ static nmbs_error handle_req_fc(nmbs_t* nmbs) {
             break;
 #endif
         default:
-            nmbs->platform.flush(nmbs, nmbs->platform.arg);
-            if (!nmbs->msg.ignored)
-                err = send_exception_msg(nmbs, NMBS_EXCEPTION_ILLEGAL_FUNCTION);
+            if (nmbs->custom.handler && nmbs->msg.fc == nmbs->custom.fc) {
+                err = handle_custom_server_fc(nmbs);
+            }
+            else {
+                nmbs->platform.flush(nmbs, nmbs->platform.arg);
+                if (!nmbs->msg.ignored)
+                    err = send_exception_msg(nmbs, NMBS_EXCEPTION_ILLEGAL_FUNCTION);
+            }
     }
 
     return err;
@@ -1953,6 +2079,41 @@ nmbs_error nmbs_server_poll(nmbs_t* nmbs) {
 
 void nmbs_set_callbacks_arg(nmbs_t* nmbs, void* arg) {
     nmbs->callbacks.arg = arg;
+}
+
+
+nmbs_error nmbs_set_custom_server_fc(nmbs_t* nmbs, uint8_t fc, uint16_t request_data_len,
+                                     nmbs_custom_server_fc_handler handler) {
+    if (!nmbs)
+        return NMBS_ERROR_INVALID_ARGUMENT;
+
+    if (request_data_len > NMBS_PDU_DATA_MAX)
+        return NMBS_ERROR_INVALID_ARGUMENT;
+
+    nmbs->custom.fc = fc;
+    nmbs->custom.request_data_len = request_data_len;
+    nmbs->custom.data_len_handler = NULL;
+    nmbs->custom.handler = handler;
+
+    return NMBS_ERROR_NONE;
+}
+
+
+nmbs_error nmbs_set_custom_server_fc_dynamic(nmbs_t* nmbs, uint8_t fc,
+                                             nmbs_custom_server_fc_data_len_handler data_len_handler,
+                                             nmbs_custom_server_fc_handler handler) {
+    if (!nmbs)
+        return NMBS_ERROR_INVALID_ARGUMENT;
+
+    if (handler && !data_len_handler)
+        return NMBS_ERROR_INVALID_ARGUMENT;
+
+    nmbs->custom.fc = fc;
+    nmbs->custom.request_data_len = 0;
+    nmbs->custom.data_len_handler = data_len_handler;
+    nmbs->custom.handler = handler;
+
+    return NMBS_ERROR_NONE;
 }
 #endif
 
