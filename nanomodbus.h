@@ -193,7 +193,7 @@ typedef nmbs_error (*nmbs_custom_server_fc_handler)(uint8_t fc, const uint8_t* r
 /**
  * Custom server function-code request-length callback.
  *
- * Used with nmbs_set_custom_server_fc_dynamic() to determine custom request data length (excluding function code)
+ * Used with nmbs_set_custom_server_fc() to determine custom request data length (excluding function code)
  * from received request-data prefix bytes.
  *
  * On each invocation:
@@ -385,40 +385,25 @@ void nmbs_set_callbacks_arg(nmbs_t* nmbs, void* arg);
  *
  * This is intended for non-standard function codes not handled by built-in nanoMODBUS handlers.
  * Built-in handlers always take precedence over this callback.
- * `request_data_len` is the exact number of request PDU data bytes (excluding function code).
+ *
+ * Modes:
+ * - Fixed length: `data_len_handler == NULL`, `request_data_len` is the exact request-data length.
+ * - Dynamic length: `data_len_handler != NULL`, `request_data_len` is the minimum number of request-data bytes to
+ *   receive before calling `data_len_handler` the first time.
+ *
  * Use `handler = NULL` to disable custom handling.
  *
  * @param nmbs pointer to the nmbs_t instance
  * @param fc custom function code to intercept
- * @param request_data_len request data size in bytes (must be <= 252)
+ * @param request_data_len fixed request-data length, or dynamic-mode prefix length (must be <= 252)
+ * @param data_len_handler callback used to resolve request-data length in dynamic mode, NULL for fixed mode
  * @param handler callback function pointer, or NULL to disable
  *
  * @return NMBS_ERROR_NONE if successful, NMBS_ERROR_INVALID_ARGUMENT otherwise.
  */
 nmbs_error nmbs_set_custom_server_fc(nmbs_t* nmbs, uint8_t fc, uint16_t request_data_len,
+                                     nmbs_custom_server_fc_data_len_handler data_len_handler,
                                      nmbs_custom_server_fc_handler handler);
-
-/** Configure a custom server function-code handler with dynamic request length.
- *
- * Intended for custom function codes where request-data length depends on request payload content
- * (for example, a byte-count field in the request data).
- *
- * `data_len_handler` is used to determine total request-data length (excluding function code).
- * In RTU, nanoMODBUS calls it as bytes are received until length is known, then validates CRC.
- * In TCP, nanoMODBUS validates MBAP-derived request length against `data_len_handler`.
- *
- * Use `handler = NULL` to disable custom handling.
- *
- * @param nmbs pointer to the nmbs_t instance
- * @param fc custom function code to intercept
- * @param data_len_handler callback used to resolve request-data length
- * @param handler callback function pointer, or NULL to disable
- *
- * @return NMBS_ERROR_NONE if successful, NMBS_ERROR_INVALID_ARGUMENT otherwise.
- */
-nmbs_error nmbs_set_custom_server_fc_dynamic(nmbs_t* nmbs, uint8_t fc,
-                                             nmbs_custom_server_fc_data_len_handler data_len_handler,
-                                             nmbs_custom_server_fc_handler handler);
 #endif
 
 #ifndef NMBS_CLIENT_DISABLED

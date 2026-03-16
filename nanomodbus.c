@@ -1807,15 +1807,33 @@ static nmbs_error handle_read_device_identification(nmbs_t* nmbs) {
 }
 #endif
 
-static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
-    if (!nmbs->custom.handler)
-        return send_exception_msg(nmbs, NMBS_EXCEPTION_ILLEGAL_FUNCTION);
+static nmbs_error resolve_custom_request_data_len(nmbs_t* nmbs, const uint8_t* request_data,
+                                                  uint16_t request_data_len_available, bool* is_complete_out,
+                                                  uint16_t* request_data_len_out) {
+    *is_complete_out = false;
+    *request_data_len_out = 0;
 
+    const nmbs_error err = nmbs->custom.data_len_handler(nmbs->msg.fc, request_data, request_data_len_available,
+                                                         is_complete_out, request_data_len_out, nmbs->msg.unit_id,
+                                                         nmbs->callbacks.arg);
+    if (err != NMBS_ERROR_NONE)
+        return err;
+
+    if (*is_complete_out &&
+        (*request_data_len_out > NMBS_PDU_DATA_MAX || *request_data_len_out < request_data_len_available))
+        return NMBS_ERROR_INVALID_REQUEST;
+
+    return NMBS_ERROR_NONE;
+}
+
+static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
     const uint8_t* request_data = NULL;
     uint16_t request_data_len = nmbs->custom.request_data_len;
     nmbs_error err = NMBS_ERROR_NONE;
 
     if (nmbs->custom.data_len_handler) {
+        const uint16_t request_data_probe_len = nmbs->custom.request_data_len;
+
         if (nmbs->platform.transport == NMBS_TRANSPORT_TCP) {
             const uint16_t mbap_length = ((uint16_t) nmbs->msg.buf[4] << 8) | (uint16_t) nmbs->msg.buf[5];
             if (mbap_length < 2)
@@ -1825,15 +1843,27 @@ static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
             if (request_data_len > NMBS_PDU_DATA_MAX)
                 return NMBS_ERROR_INVALID_REQUEST;
 
+            // In TCP, recv_msg_header() has already read the full PDU payload in nmbs->msg.buf.
             if (request_data_len > 0)
                 request_data = nmbs->msg.buf + nmbs->msg.buf_idx;
 
+            if (request_data_len < request_data_probe_len)
+                return NMBS_ERROR_INVALID_REQUEST;
+
             bool is_complete = false;
             uint16_t resolved_len = 0;
-            err = nmbs->custom.data_len_handler(nmbs->msg.fc, request_data, request_data_len, &is_complete,
-                                                &resolved_len, nmbs->msg.unit_id, nmbs->callbacks.arg);
+
+            const uint8_t* request_data_probe = request_data_probe_len > 0 ? request_data : NULL;
+            err = resolve_custom_request_data_len(nmbs, request_data_probe, request_data_probe_len, &is_complete,
+                                                  &resolved_len);
             if (err != NMBS_ERROR_NONE)
                 return err;
+
+            if (!is_complete && request_data_probe_len < request_data_len) {
+                err = resolve_custom_request_data_len(nmbs, request_data, request_data_len, &is_complete, &resolved_len);
+                if (err != NMBS_ERROR_NONE)
+                    return err;
+            }
 
             if (!is_complete || resolved_len != request_data_len)
                 return NMBS_ERROR_INVALID_REQUEST;
@@ -1843,8 +1873,23 @@ static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
             bool request_data_len_known = false;
             uint16_t request_data_len_read = 0;
 
+            if (request_data_probe_len == 0) {
+                bool is_complete = false;
+                uint16_t resolved_len = 0;
+                err = resolve_custom_request_data_len(nmbs, NULL, 0, &is_complete, &resolved_len);
+                if (err != NMBS_ERROR_NONE)
+                    return err;
+
+                if (is_complete) {
+                    request_data_len = resolved_len;
+                    request_data_len_known = true;
+                }
+            }
+
             while (!request_data_len_known || request_data_len_read < request_data_len) {
                 if (nmbs->msg.buf_idx >= (sizeof(nmbs->msg.buf) - 2))
+                    return NMBS_ERROR_INVALID_REQUEST;
+                if (request_data_len_read >= NMBS_PDU_DATA_MAX)
                     return NMBS_ERROR_INVALID_REQUEST;
 
                 err = recv(nmbs, 1);
@@ -1854,19 +1899,15 @@ static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
                 discard_1(nmbs);
                 request_data_len_read++;
 
-                if (!request_data_len_known) {
+                if (!request_data_len_known && request_data_len_read >= request_data_probe_len) {
                     bool is_complete = false;
                     uint16_t resolved_len = 0;
-                    err = nmbs->custom.data_len_handler(nmbs->msg.fc, nmbs->msg.buf + request_data_start,
-                                                        request_data_len_read, &is_complete, &resolved_len,
-                                                        nmbs->msg.unit_id, nmbs->callbacks.arg);
+                    err = resolve_custom_request_data_len(nmbs, nmbs->msg.buf + request_data_start, request_data_len_read,
+                                                          &is_complete, &resolved_len);
                     if (err != NMBS_ERROR_NONE)
                         return err;
 
                     if (is_complete) {
-                        if (resolved_len > NMBS_PDU_DATA_MAX || resolved_len < request_data_len_read)
-                            return NMBS_ERROR_INVALID_REQUEST;
-
                         request_data_len = resolved_len;
                         request_data_len_known = true;
                     }
@@ -2083,6 +2124,7 @@ void nmbs_set_callbacks_arg(nmbs_t* nmbs, void* arg) {
 
 
 nmbs_error nmbs_set_custom_server_fc(nmbs_t* nmbs, uint8_t fc, uint16_t request_data_len,
+                                     nmbs_custom_server_fc_data_len_handler data_len_handler,
                                      nmbs_custom_server_fc_handler handler) {
     if (!nmbs)
         return NMBS_ERROR_INVALID_ARGUMENT;
@@ -2092,25 +2134,7 @@ nmbs_error nmbs_set_custom_server_fc(nmbs_t* nmbs, uint8_t fc, uint16_t request_
 
     nmbs->custom.fc = fc;
     nmbs->custom.request_data_len = request_data_len;
-    nmbs->custom.data_len_handler = NULL;
-    nmbs->custom.handler = handler;
-
-    return NMBS_ERROR_NONE;
-}
-
-
-nmbs_error nmbs_set_custom_server_fc_dynamic(nmbs_t* nmbs, uint8_t fc,
-                                             nmbs_custom_server_fc_data_len_handler data_len_handler,
-                                             nmbs_custom_server_fc_handler handler) {
-    if (!nmbs)
-        return NMBS_ERROR_INVALID_ARGUMENT;
-
-    if (handler && !data_len_handler)
-        return NMBS_ERROR_INVALID_ARGUMENT;
-
-    nmbs->custom.fc = fc;
-    nmbs->custom.request_data_len = 0;
-    nmbs->custom.data_len_handler = data_len_handler;
+    nmbs->custom.data_len_handler = handler ? data_len_handler : NULL;
     nmbs->custom.handler = handler;
 
     return NMBS_ERROR_NONE;
