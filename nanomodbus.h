@@ -180,14 +180,14 @@ typedef struct nmbs_platform_conf {
  * bytes (again, function code excluded).
  * `request_data` can be NULL when `request_data_len` is 0.
  *
- * On input, `*response_data_len_in_out` is the capacity of `response_data_out`.
- * On output, `*response_data_len_in_out` must contain the actual number of response data bytes.
+ * On input, `*response_data_len` is the capacity of `response_data`.
+ * On output, `*response_data_len` must contain the actual number of response data bytes.
  *
  * Return NMBS_ERROR_NONE on success, a Modbus exception (NMBS_EXCEPTION_*) to return that exception to the client,
  * or a library error.
  */
-typedef nmbs_error (*nmbs_custom_server_fc_handler)(uint8_t fc, const uint8_t* request_data, uint16_t request_data_len,
-                                                    uint8_t* response_data_out, uint16_t* response_data_len_in_out,
+typedef nmbs_error (*nmbs_custom_server_fc_handler)(const uint8_t* request_data, uint16_t request_data_len,
+                                                    uint8_t* response_data, uint16_t* response_data_len,
                                                     uint8_t unit_id, void* arg);
 
 /**
@@ -198,15 +198,15 @@ typedef nmbs_error (*nmbs_custom_server_fc_handler)(uint8_t fc, const uint8_t* r
  *
  * On each invocation:
  * - `request_data` points to the currently received request-data prefix
- * - `request_data_len_available` is the prefix size in bytes
- * - set `*is_complete_out = true` and `*request_data_len_out` to the total request-data length when known
- * - set `*is_complete_out = false` if more bytes are needed to determine the length
+ * - `request_data_len` is the prefix size in bytes
+ * - set `*complete = true` and `*required_len` to the total request-data length when known
+ * - set `*complete = false` if more bytes are needed to determine the length
  *
  * Return NMBS_ERROR_NONE on success, or an error to abort request handling.
  */
-typedef nmbs_error (*nmbs_custom_server_fc_data_len_handler)(uint8_t fc, const uint8_t* request_data,
-                                                             uint16_t request_data_len_available, bool* is_complete_out,
-                                                             uint16_t* request_data_len_out, uint8_t unit_id, void* arg);
+typedef nmbs_error (*nmbs_custom_server_fc_data_len_handler)(const uint8_t* request_data,
+                                                             uint16_t request_data_len, bool* complete,
+                                                             uint16_t* required_len, uint8_t unit_id, void* arg);
 
 #endif
 
