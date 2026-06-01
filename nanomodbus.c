@@ -502,7 +502,7 @@ static nmbs_error recv_res_header(nmbs_t* nmbs) {
             if (err != NMBS_ERROR_NONE)
                 return err;
 
-            if (exception < 1 || exception > 4)
+            if (!nmbs_error_is_exception(exception))
                 return NMBS_ERROR_INVALID_RESPONSE;
 
             NMBS_DEBUG_PRINT("%d NMBS res <- address_rtu %d\texception %d\n", nmbs->address_rtu, nmbs->msg.unit_id,
@@ -2640,6 +2640,21 @@ const char* nmbs_strerror(nmbs_error error) {
 
         case NMBS_EXCEPTION_SERVER_DEVICE_FAILURE:
             return "modbus exception 4: server device failure";
+
+        case NMBS_EXCEPTION_ACKNOWLEDGE:
+            return "modbus exception 5: acknowledge";
+
+        case NMBS_EXCEPTION_SERVER_DEVICE_BUSY:
+            return "modbus exception 6: server device busy";
+
+        case NMBS_EXCEPTION_MEMORY_PARITY_ERROR:
+            return "modbus exception 8: memory parity error";
+
+        case NMBS_EXCEPTION_GATEWAY_PATH_UNAVAILABLE:
+            return "modbus exception 10: gateway path unavailable";
+
+        case NMBS_EXCEPTION_GATEWAY_TARGET_DEVICE_FAILED_TO_RESPOND:
+            return "modbus exception 11: gateway target device failed to respond";
 
         default:
             return "unknown error";

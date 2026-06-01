@@ -66,10 +66,15 @@ typedef enum nmbs_error {
     NMBS_ERROR_NONE = 0,              /**< No error */
 
     // Modbus exceptions
-    NMBS_EXCEPTION_ILLEGAL_FUNCTION = 1,      /**< Modbus exception 1 */
-    NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS = 2,  /**< Modbus exception 2 */
-    NMBS_EXCEPTION_ILLEGAL_DATA_VALUE = 3,    /**< Modbus exception 3 */
-    NMBS_EXCEPTION_SERVER_DEVICE_FAILURE = 4, /**< Modbus exception 4 */
+    NMBS_EXCEPTION_ILLEGAL_FUNCTION = 1,                         /**< Modbus exception 1 */
+    NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS = 2,                     /**< Modbus exception 2 */
+    NMBS_EXCEPTION_ILLEGAL_DATA_VALUE = 3,                       /**< Modbus exception 3 */
+    NMBS_EXCEPTION_SERVER_DEVICE_FAILURE = 4,                    /**< Modbus exception 4 */
+    NMBS_EXCEPTION_ACKNOWLEDGE = 5,                              /**< Modbus exception 5 */
+    NMBS_EXCEPTION_SERVER_DEVICE_BUSY = 6,                       /**< Modbus exception 6 */
+    NMBS_EXCEPTION_MEMORY_PARITY_ERROR = 8,                      /**< Modbus exception 8 */
+    NMBS_EXCEPTION_GATEWAY_PATH_UNAVAILABLE = 10,                /**< Modbus exception 10 */
+    NMBS_EXCEPTION_GATEWAY_TARGET_DEVICE_FAILED_TO_RESPOND = 11, /**< Modbus exception 11 */
 } nmbs_error;
 
 
@@ -77,7 +82,7 @@ typedef enum nmbs_error {
  * Return whether the nmbs_error is a modbus exception
  * @e nmbs_error to check
  */
-#define nmbs_error_is_exception(e) ((e) > 0 && (e) < 5)
+#define nmbs_error_is_exception(e) ((e) > 0 && (e) < 12 && (e) != 7 && (e) != 9)
 
 #ifndef NMBS_BITFIELD_MAX
 #define NMBS_BITFIELD_MAX 2000
