@@ -1808,19 +1808,18 @@ static nmbs_error handle_read_device_identification(nmbs_t* nmbs) {
 #endif
 
 static nmbs_error resolve_custom_request_data_len(nmbs_t* nmbs, const uint8_t* request_data,
-                                                  uint16_t request_data_len_available, bool* is_complete_out,
-                                                  uint16_t* request_data_len_out) {
-    *is_complete_out = false;
-    *request_data_len_out = 0;
+                                                  uint16_t request_data_len, bool* complete,
+                                                  uint16_t* required_len) {
+    *complete = false;
+    *required_len = 0;
 
-    const nmbs_error err = nmbs->custom.data_len_handler(nmbs->msg.fc, request_data, request_data_len_available,
-                                                         is_complete_out, request_data_len_out, nmbs->msg.unit_id,
+    const nmbs_error err = nmbs->custom.data_len_handler(request_data, request_data_len,
+                                                         complete, required_len, nmbs->msg.unit_id,
                                                          nmbs->callbacks.arg);
     if (err != NMBS_ERROR_NONE)
         return err;
 
-    if (*is_complete_out &&
-        (*request_data_len_out > NMBS_PDU_DATA_MAX || *request_data_len_out < request_data_len_available))
+    if (*complete && (*required_len > NMBS_PDU_DATA_MAX || *required_len < request_data_len))
         return NMBS_ERROR_INVALID_REQUEST;
 
     return NMBS_ERROR_NONE;
@@ -1942,7 +1941,7 @@ static nmbs_error handle_custom_server_fc(nmbs_t* nmbs) {
     uint8_t response_data[NMBS_PDU_DATA_MAX];
     uint16_t response_data_len = NMBS_PDU_DATA_MAX;
 
-    err = nmbs->custom.handler(nmbs->msg.fc, request_data, request_data_len, response_data, &response_data_len,
+    err = nmbs->custom.handler(request_data, request_data_len, response_data, &response_data_len,
                                nmbs->msg.unit_id, nmbs->callbacks.arg);
     if (err != NMBS_ERROR_NONE) {
         if (nmbs_error_is_exception(err))
